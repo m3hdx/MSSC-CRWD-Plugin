@@ -1,0 +1,579 @@
+openapi: 3.0.1
+info:
+  title: CrowdStrike Falcon — Alfred SOC Enrichment API
+  version: "1.0.0"
+  description: >
+    Curated, read-only subset of the CrowdStrike Falcon API exposed to the
+    Microsoft Security Copilot "Alfred - SOC" agent. Supports three SOC
+    investigation use cases:
+
+      1. Artifact lookup (user, device, IP, hash) against Falcon alerts
+         and detections via the unified Alerts API.
+      2. CVE lookup against Falcon Spotlight, returning vulnerability
+         details and the assets (hosts) affected.
+      3. Free-form CrowdStrike Query Language (CQL) searches against the
+         Next-Gen SIEM (NGSIEM / LogScale) via the async query-job API.
+
+    Authentication is OAuth 2.0 Client Credentials. The token is acquired
+    from POST {server}/oauth2/token and supplied in the Authorization
+    header as `Bearer <token>` for every request.
+
+servers:
+  - url: https://api.crowdstrike.com
+    description: US-1 (default). Override per cloud — US-2, EU-1, US-GOV-1.
+
+# Security Copilot injects the bearer token from OAuthClientCredentialsFlow.
+security:
+  - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    AlertCompositeIdsRequest:
+      type: object
+      required: [composite_ids]
+      properties:
+        composite_ids:
+          type: array
+          items:
+            type: string
+          description: >
+            Array of Falcon Alert composite IDs returned by
+            SearchAlertsByFQL. A composite ID looks like
+            `<vendor>:ind:<aid>:<id>` or
+            `pid:<vendor>:<aid>:<id>` depending on the alert source.
+
+    DeviceIdsRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          items:
+            type: string
+          description: Array of Falcon device agent IDs (AIDs) to fetch.
+
+    NGSIEMQueryJobInput:
+      type: object
+      required: [queryString]
+      properties:
+        queryString:
+          type: string
+          description: >
+            The CrowdStrike Query Language (CQL / formerly LQL) string to
+            execute. Example:
+              `#repo=base_sensor #event_simpleName=ProcessRollup2
+               | UserName="jdoe" | head(100)`
+        start:
+          type: string
+          description: >
+            Search start time. Either a relative offset (e.g. `1h`, `24h`,
+            `7d`) or an absolute ISO-8601 timestamp
+            (e.g. `2026-05-14T00:00:00Z`).
+          example: "24h"
+        end:
+          type: string
+          description: >
+            Search end time. Either a relative offset or absolute
+            ISO-8601 timestamp. Use `now` for the current moment.
+          example: "now"
+        isLive:
+          type: boolean
+          description: >
+            Whether this is a live tailing query. ALWAYS pass `false`
+            from Security Copilot — live queries don't terminate and
+            will consume the request budget.
+          default: false
+        timeZone:
+          type: string
+          description: IANA time zone for the search. Defaults to UTC.
+          example: "UTC"
+
+paths:
+  # =========================================================================
+  # USE CASE 1: ARTIFACT LOOKUP → ALERTS / DETECTIONS
+  # =========================================================================
+
+  /alerts/queries/alerts/v2:
+    get:
+      operationId: SearchAlertsByFQL
+      summary: >
+        Search Falcon alerts and detections by user, device, IP, hash, or
+        any other indicator using a Falcon Query Language (FQL) filter.
+      description: |
+        Returns the list of Falcon Alert composite IDs matching an FQL
+        filter. Use this skill any time an analyst wants to know whether
+        CrowdStrike has detections involving a specific artifact —
+        a username, hostname, device, IP address, file hash, file name,
+        process, or domain.
+
+        After calling this skill, the caller should normally pipe the
+        returned `resources` array (the composite IDs) into
+        `GetAlertDetails` to retrieve the full alert payloads.
+
+        ## How to build the FQL `filter`
+
+        FQL uses `field:'value'` syntax. Combine clauses with `+`
+        (AND) and `,` (OR). Wrap values in single quotes. Use `*`
+        for wildcards.
+
+        Common artifact → FQL mappings (apply whichever matches):
+
+          • Username:
+              `device.user_name:'jdoe'`
+              `user_name:'jdoe'`
+          • Hostname / device name:
+              `device.hostname:'WIN-LAPTOP-01'`
+          • Internal / external IP:
+              `device.local_ip:'10.1.2.3'`
+              `device.external_ip:'203.0.113.55'`
+          • SHA256 / MD5 / SHA1 hash:
+              `sha256:'a1b2c3...'`
+              `md5:'...'`
+              `sha1:'...'`
+          • File name / process:
+              `filename:'mimikatz.exe'`
+              `cmdline:*powershell*`
+          • Time window (always recommended):
+              `created_timestamp:>'2026-05-01T00:00:00Z'`
+          • Severity:
+              `severity:>=70`
+          • Status (open work):
+              `status:'new',status:'in_progress'`
+
+        Multiple clauses are joined with `+`. Example for "open
+        detections on host WIN-LAPTOP-01 in the last 7 days":
+          `device.hostname:'WIN-LAPTOP-01'+created_timestamp:>'2026-05-07T00:00:00Z'+status:'new'`
+
+        ## Returns
+
+        An object whose `resources` field is an array of composite IDs.
+        If empty, there are no matching alerts in Falcon and the
+        analyst should be told so directly.
+      tags: [Detections]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: filter
+          in: query
+          required: true
+          schema:
+            type: string
+          description: >
+            FQL filter expression. REQUIRED for the orchestrator —
+            do not call this skill with an empty filter.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+          description: Max alerts to return (default 100, hard cap 1000).
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+          description: Offset for paging through large result sets.
+        - name: sort
+          in: query
+          required: false
+          schema:
+            type: string
+            default: "created_timestamp|desc"
+          description: >
+            Sort expression in `field|direction` form, e.g.
+            `created_timestamp|desc`, `severity|desc`.
+        - name: q
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >
+            Optional free-text keyword search across alert metadata.
+            Use this only when an FQL field doesn't fit (e.g. matching
+            an arbitrary string somewhere in the alert body).
+      responses:
+        "200":
+          description: Composite IDs of alerts matching the filter.
+        "400":
+          description: Bad FQL filter. Re-examine the filter syntax.
+        "403":
+          description: Missing the `alerts:read` API scope.
+
+  /alerts/entities/alerts/v2:
+    post:
+      operationId: GetAlertDetails
+      summary: >
+        Fetch full alert / detection details for one or more Falcon
+        Alert composite IDs.
+      description: |
+        Given an array of composite IDs (from `SearchAlertsByFQL`),
+        return the full alert objects, including: detection name,
+        severity, technique, tactic, IOC values, device info
+        (hostname, AID, local & external IPs, OS, platform),
+        user context, file/hash details, parent/child processes,
+        timeline, status, assignment, and links back to the Falcon
+        console.
+
+        Always summarise the findings for the analyst — never just
+        dump the raw JSON. Include: how many detections were found,
+        the top severities, the involved hosts and users, the
+        techniques observed, and a deep-link suggestion to the
+        Falcon console for follow-up.
+
+        Maximum 1000 composite IDs per call.
+      tags: [Detections]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlertCompositeIdsRequest"
+      responses:
+        "200":
+          description: Array of full alert objects.
+        "400":
+          description: Bad composite ID format or empty array.
+        "403":
+          description: Missing the `alerts:read` API scope.
+
+  # =========================================================================
+  # USE CASE 1 (cont.): DEVICE LOOKUP — used to resolve hostnames/IPs to AIDs
+  # =========================================================================
+
+  /devices/queries/devices/v1:
+    get:
+      operationId: SearchDevices
+      summary: >
+        Find Falcon-managed hosts (devices) by hostname, IP, platform,
+        OS version, or other criteria.
+      description: |
+        Returns a list of Falcon device agent IDs (AIDs) matching an
+        FQL filter. Use this when the analyst asks about a host
+        directly ("Is WIN-LAPTOP-01 onboarded?", "What's the
+        external IP of WIN-LAPTOP-01?") rather than about
+        detections involving the host.
+
+        Common filters:
+          • `hostname:'WIN-LAPTOP-01'`
+          • `local_ip:'10.1.2.3'`
+          • `external_ip:'203.0.113.55'`
+          • `platform_name:'Windows'`
+          • `last_seen:>'now-7d'`
+
+        Returned AIDs should be passed to `GetDeviceDetails` to get
+        the rich device record.
+      tags: [Devices]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: filter
+          in: query
+          required: false
+          schema:
+            type: string
+          description: FQL filter expression.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+            maximum: 5000
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+        - name: sort
+          in: query
+          required: false
+          schema:
+            type: string
+          description: e.g. `hostname.asc`, `last_seen.desc`.
+      responses:
+        "200":
+          description: Array of device agent IDs.
+        "403":
+          description: Missing the `devices:read` API scope.
+
+  /devices/entities/devices/v2:
+    post:
+      operationId: GetDeviceDetails
+      summary: Get full device records for one or more Falcon AIDs.
+      description: |
+        Returns the full host record for each agent ID supplied —
+        hostname, OS, platform, kernel, BIOS, local & external IPs,
+        MAC addresses, last/first seen, sensor version, hostgroups,
+        tags, OU, site, containment status, and more.
+
+        Max 5000 AIDs per call.
+      tags: [Devices]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceIdsRequest"
+      responses:
+        "200":
+          description: Array of device detail objects.
+        "403":
+          description: Missing the `devices:read` API scope.
+
+  # =========================================================================
+  # USE CASE 2: CVE LOOKUP → AFFECTED ASSETS (FALCON SPOTLIGHT)
+  # =========================================================================
+
+  /spotlight/queries/vulnerabilities/v1:
+    get:
+      operationId: SearchVulnerabilities
+      summary: >
+        Search Falcon Spotlight for vulnerabilities matching a CVE
+        ID or other criteria. Returns vulnerability instance IDs.
+      description: |
+        Use this when the analyst asks "which of our hosts are
+        affected by CVE-XXXX-YYYY?" or wants a more general
+        Spotlight query.
+
+        A Spotlight "vulnerability" is an *instance* — one (CVE,
+        host) pair. Therefore searching by CVE typically returns
+        many IDs, one per affected host.
+
+        Common filters (one or more, joined with `+`):
+          • CVE ID (REQUIRED for the CVE-lookup use case):
+              `cve.id:'CVE-2024-12345'`
+          • Status (open work):
+              `status:'open',status:'reopen'`
+          • Severity:
+              `cve.severity:'HIGH'` (also CRITICAL, MEDIUM, LOW)
+          • Time window:
+              `created_timestamp:>'2026-01-01T00:00:00Z'`
+
+        The skill returns vulnerability IDs; pass them to
+        `GetVulnerabilityDetails` to enumerate the affected hosts.
+      tags: [Vulnerabilities]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: filter
+          in: query
+          required: true
+          schema:
+            type: string
+          description: FQL filter. Wildcards are not supported by Spotlight.
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 100
+            maximum: 400
+          description: Spotlight hard caps at 400 per request.
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Pagination cursor returned by the previous call.
+        - name: sort
+          in: query
+          required: false
+          schema:
+            type: string
+            default: "updated_timestamp|desc"
+      responses:
+        "200":
+          description: Array of vulnerability instance IDs + paging cursor.
+        "400":
+          description: Bad FQL filter.
+        "403":
+          description: Missing the `spotlight-vulnerabilities:read` API scope.
+
+  /spotlight/entities/vulnerabilities/v2:
+    get:
+      operationId: GetVulnerabilityDetails
+      summary: >
+        Get full vulnerability records (including the affected host)
+        for one or more Spotlight vulnerability IDs.
+      description: |
+        Returns rich per-(CVE,host) records: CVE metadata (CVSS,
+        description, exploit status, exploited-in-wild, references),
+        the affected host (AID, hostname, platform, OS build, group
+        tags, last seen), remediation info (KBs, vendor advisories),
+        and timestamps.
+
+        After receiving these records, summarise for the analyst:
+          • Total assets affected by the CVE.
+          • Breakdown by severity / platform / hostgroup.
+          • A short, named list of the top affected hostnames
+            (cap at ~10; offer to drill in further if there are
+             more).
+          • Whether the CVE is known to be exploited in the wild.
+          • The recommended remediation per Falcon's data.
+
+        Max 400 IDs per call.
+      tags: [Vulnerabilities]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: ids
+          in: query
+          required: true
+          schema:
+            type: array
+            items:
+              type: string
+          explode: true
+          description: One vulnerability instance ID per `ids` query parameter.
+      responses:
+        "200":
+          description: Array of vulnerability detail objects.
+        "403":
+          description: Missing the `spotlight-vulnerabilities:read` API scope.
+
+  # =========================================================================
+  # USE CASE 3: NGSIEM (LogScale) ASYNC ADVANCED SEARCH
+  # =========================================================================
+
+  /humio/api/v1/repositories/{repository}/queryjobs:
+    post:
+      operationId: StartNGSIEMSearch
+      summary: >
+        Start an asynchronous CrowdStrike Query Language (CQL) search
+        against a CrowdStrike Next-Gen SIEM (LogScale) repository.
+      description: |
+        Submits a CQL query as a *job*. Returns immediately with a
+        `id` string. The caller MUST then poll
+        `GetNGSIEMSearchResults` (passing the same `repository` and
+        the returned `id`) until the response indicates `done: true`,
+        then return the events to the analyst.
+
+        REQUIRED API scope: `humio-auth-proxy:write` (in the
+        CrowdStrike UI this is the "NGSIEM" scope with WRITE enabled).
+        If the analyst sees a 403 on this call, the API client is
+        missing that scope.
+
+        ## Repository selection
+
+        The `repository` path parameter must match one of the
+        configured NGSIEM repositories in the tenant. Common values:
+          • `search-all` — searches across all available repositories
+            (slowest, broadest)
+          • `investigate_view` — the Falcon investigate view
+          • `falcon` — Falcon sensor data only
+          • Custom tenant repos as appropriate
+
+        If unsure, the analyst will name a repo; if they don't,
+        default to the configured `NGSIEMDefaultRepository` setting
+        on the plugin.
+
+        ## CQL hints
+
+        • Start narrow. Always include `#event_simpleName=...` or
+          a `#repo=...` tag if known.
+        • Filter early: `UserName="jdoe"`, `RemoteAddressIP4="..."`.
+        • Cap output: append `| head(200)` or
+          `| tail(200)` to prevent flooding the orchestrator.
+        • Use `groupBy([...])` for aggregations when the analyst
+          wants counts rather than raw events.
+        • For IOC enrichment, the `ioc:lookup()` function maps event
+          fields to CrowdStrike threat-intel feeds.
+
+        Example body for "PowerShell with encoded commands on
+        WIN-LAPTOP-01 in the last 24h":
+
+          queryString: `#event_simpleName=ProcessRollup2 ComputerName="WIN-LAPTOP-01" ImageFileName=*powershell.exe CommandLine=*-enc* | head(100)`
+          start: `24h`
+          end: `now`
+          isLive: `false`
+      tags: [NGSIEM]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: repository
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Name of the LogScale/NGSIEM repository (e.g. `search-all`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NGSIEMQueryJobInput"
+      responses:
+        "200":
+          description: >
+            Job submitted. Response includes `id` (the job ID to poll).
+        "400":
+          description: Malformed CQL or invalid time range.
+        "403":
+          description: >
+            Missing the `humio-auth-proxy:write` (NGSIEM Write in the UI) scope.
+        "404":
+          description: Unknown repository name.
+
+  /humio/api/v1/repositories/{repository}/queryjobs/{id}:
+    get:
+      operationId: GetNGSIEMSearchResults
+      summary: >
+        Poll an NGSIEM search job for its current status and any
+        accumulated results.
+      description: |
+        Call this after `StartNGSIEMSearch`. Response shape:
+          {
+            "done":     bool,    // false → poll again after ~1-2s
+            "events":   [...],   // matching events so far
+            "metaData": {...},   // counts, processing stats
+            "cancelled": bool
+          }
+
+        Polling behaviour the orchestrator should follow:
+          1. Call this skill once.
+          2. If `done == false` and `cancelled == false`, wait
+             briefly and call again, up to a reasonable retry budget
+             (e.g. 5–10 polls).
+          3. When `done == true`, summarise the events to the
+             analyst — number of events, key fields,
+             grouped/aggregated where helpful — and offer to
+             refine the query or pull more details.
+
+        Required API scope: `humio-auth-proxy:read`
+        (UI: "NGSIEM" Read).
+      tags: [NGSIEM]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: repository
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The job ID returned by `StartNGSIEMSearch`.
+      responses:
+        "200":
+          description: Search status, possibly with partial or final events.
+        "403":
+          description: "Missing the `humio-auth-proxy:read` (NGSIEM Read in the UI) scope."
+        "404":
+          description: Job not found / expired.
