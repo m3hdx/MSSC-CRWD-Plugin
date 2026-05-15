@@ -470,29 +470,16 @@ paths:
         ## Repository selection
 
         The `repository` path parameter must match one of the
-        configured NGSIEM repositories in the tenant. The current
-        tenant has the following repos (ranked by volume):
+        configured NGSIEM repositories in the tenant.
+        For example:
 
           • `search-all`     — virtual: searches across all repos
           • `base_sensor`    — Falcon EDR sensor data (process, network,
                                 file, registry, DNS, module-load events)
-          • `paloalto`       — Palo Alto NGFW logs
-          • `vmware_esxi`    — VMware ESXi
-          • `3pi_cisco_meraki_hec` — Cisco Meraki
-          • `3pi_windows_ad` — Windows Active Directory
           • `saas_security`  — SaaS Security (Falcon Shield)
           • `3pi_microsoft_entra_id` — Entra ID sign-in / audit
           • `microsoft_defender_xdr` — Defender XDR
-          • `microsoft_exchange_online` — Exchange Online
-          • `3pi_mssharepoint` — SharePoint
-          • `mimecast`       — Mimecast
-          • `3pi_microsoft_defender_for_identity` — MDI
-          • `3pi_microsoft_teams` — Microsoft Teams
-          • `3pi_f5_bigip`   — F5 BIG-IP
-          • `3pi_salesforce` — Salesforce
-          • `risks`, `detections`, `fusion`, `sensor_metadata`,
-            `xdr_indicatorsrepo` — Falcon-managed analytic repos
-
+          
         Pick the *narrowest* repo that can answer the question
         (e.g. `base_sensor` for process/DNS hunts; `paloalto` for
         firewall log searches). Fall back to `search-all` only when
