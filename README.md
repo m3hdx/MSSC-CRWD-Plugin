@@ -56,19 +56,7 @@ When creating the Falcon API client, enable these scopes:
 |Hosts → **Read**          |`devices:read`                  |`SearchDevices`, `GetDeviceDetails`               |
 |Vulnerabilities → **Read**|`spotlight-vulnerabilities:read`|`SearchVulnerabilities`, `GetVulnerabilityDetails`|
 |NGSIEM → **Read**         |`humio-auth-proxy:read`         |`GetNGSIEMSearchResults`                          |
-|**NGSIEM → Write** ⚠️      |`humio-auth-proxy:write`        |`StartNGSIEMSearch`                               |
-
-
-> ⚠️ **Important — NGSIEM scope mismatch in the supplied scopes sheet.**
-> The scopes spreadsheet I worked from shows **NGSIEM: Read = Yes,
-> Write = No**. Falcon classifies *submitting* a query job as a
-> `:write` operation (it creates a server-side job resource), even
-> though the analyst is only *reading* data. Without NGSIEM **Write**,
-> use case #3 will return **403** on every search.
-> 
-> Either grant NGSIEM **Write** on the API client, or remove the
-> `StartNGSIEMSearch` / `GetNGSIEMSearchResults` operations from the
-> OpenAPI spec to fail fast at install time.
+|**NGSIEM → Write**        |`humio-auth-proxy:write`        |`StartNGSIEMSearch`                               |
 
 Also tick **NGSIEM Saved Queries: Read** and **NGSIEM Dashboards: Read**
 if you plan to extend the plugin to list saved queries or dashboards
