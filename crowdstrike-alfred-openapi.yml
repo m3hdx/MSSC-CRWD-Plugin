@@ -470,33 +470,63 @@ paths:
         ## Repository selection
 
         The `repository` path parameter must match one of the
-        configured NGSIEM repositories in the tenant. Common values:
-          • `search-all` — searches across all available repositories
-            (slowest, broadest)
-          • `investigate_view` — the Falcon investigate view
-          • `falcon` — Falcon sensor data only
-          • Custom tenant repos as appropriate
+        configured NGSIEM repositories in the tenant. The current
+        tenant has the following repos (ranked by volume):
 
-        If unsure, the analyst will name a repo; if they don't,
-        default to the configured `NGSIEMDefaultRepository` setting
-        on the plugin.
+          • `search-all`     — virtual: searches across all repos
+          • `base_sensor`    — Falcon EDR sensor data (process, network,
+                                file, registry, DNS, module-load events)
+          • `paloalto`       — Palo Alto NGFW logs
+          • `vmware_esxi`    — VMware ESXi
+          • `3pi_cisco_meraki_hec` — Cisco Meraki
+          • `3pi_windows_ad` — Windows Active Directory
+          • `saas_security`  — SaaS Security (Falcon Shield)
+          • `3pi_microsoft_entra_id` — Entra ID sign-in / audit
+          • `microsoft_defender_xdr` — Defender XDR
+          • `microsoft_exchange_online` — Exchange Online
+          • `3pi_mssharepoint` — SharePoint
+          • `mimecast`       — Mimecast
+          • `3pi_microsoft_defender_for_identity` — MDI
+          • `3pi_microsoft_teams` — Microsoft Teams
+          • `3pi_f5_bigip`   — F5 BIG-IP
+          • `3pi_salesforce` — Salesforce
+          • `risks`, `detections`, `fusion`, `sensor_metadata`,
+            `xdr_indicatorsrepo` — Falcon-managed analytic repos
+
+        Pick the *narrowest* repo that can answer the question
+        (e.g. `base_sensor` for process/DNS hunts; `paloalto` for
+        firewall log searches). Fall back to `search-all` only when
+        the analyst is hunting broadly and doesn't yet know where
+        the data is.
+
+        If the analyst doesn't name a repo, default to the
+        configured `NGSIEMDefaultRepository` plugin setting.
 
         ## CQL hints
 
-        • Start narrow. Always include `#event_simpleName=...` or
-          a `#repo=...` tag if known.
-        • Filter early: `UserName="jdoe"`, `RemoteAddressIP4="..."`.
-        • Cap output: append `| head(200)` or
-          `| tail(200)` to prevent flooding the orchestrator.
+        • Start narrow. Always pin the repo and the event type, e.g.
+          `#repo=base_sensor #event_simpleName=ProcessRollup2`.
+        • Common Falcon `#event_simpleName` values in `base_sensor`:
+          `ProcessRollup2`, `EndOfProcess`, `NetworkConnectIP4`,
+          `DnsRequest`, `NewScriptWritten`, `NewExecutableWritten`,
+          `PeFileWritten`, `ClassifiedModuleLoad`,
+          `RegCrowdstrikeValueUpdate`, `ServiceStarted`,
+          `CriticalFileAccessed`, `SensorHeartbeat`.
+        • Filter early: `UserName="jdoe"`,
+          `ComputerName="WIN-LAPTOP-01"`,
+          `RemoteAddressIP4="203.0.113.5"`,
+          `SHA256HashData="…"`.
+        • Cap output: append `| head(200)` or `| tail(200)` to
+          prevent flooding the orchestrator.
         • Use `groupBy([...])` for aggregations when the analyst
           wants counts rather than raw events.
-        • For IOC enrichment, the `ioc:lookup()` function maps event
-          fields to CrowdStrike threat-intel feeds.
+        • For IOC enrichment, the `ioc:lookup()` function maps
+          event fields to CrowdStrike threat-intel feeds.
 
         Example body for "PowerShell with encoded commands on
         WIN-LAPTOP-01 in the last 24h":
 
-          queryString: `#event_simpleName=ProcessRollup2 ComputerName="WIN-LAPTOP-01" ImageFileName=*powershell.exe CommandLine=*-enc* | head(100)`
+          queryString: `#repo=base_sensor #event_simpleName=ProcessRollup2 ComputerName="WIN-LAPTOP-01" ImageFileName=/powershell\.exe$/i CommandLine=/-(e|en|enc|encodedcommand)/i | head(100)`
           start: `24h`
           end: `now`
           isLive: `false`
