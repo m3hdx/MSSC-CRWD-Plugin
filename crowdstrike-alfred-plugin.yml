@@ -1,0 +1,98 @@
+# =============================================================================
+# Microsoft Security Copilot Custom Plugin Manifest
+# CrowdStrike Falcon — read-only enrichment for the "Alfred - SOC" agent
+# =============================================================================
+#
+# Format: Security Copilot YAML manifest (NOT the legacy OpenAI ai-plugin.json)
+# Reference: https://learn.microsoft.com/en-us/copilot/security/developer/agent-manifest
+#
+# What this plugin does:
+#   • Searches Falcon alerts/detections by artifact (user, device, IP, hash)
+#   • Looks up CVEs in Falcon Spotlight and returns affected assets
+#   • Runs CQL searches against Next-Gen SIEM (NGSIEM / LogScale) repositories
+#
+# Auth: OAuth 2.0 Client Credentials against POST {FalconCloud}/oauth2/token
+# =============================================================================
+
+Descriptor:
+  # Internal name — must be unique inside the workspace. No spaces, no
+  # `/ \ ? # @ .` characters.
+  Name: CrowdStrike.Falcon.AlfredSOC
+
+  # Human-readable display name (≤40 chars).
+  DisplayName: CrowdStrike Falcon (Alfred SOC)
+
+  # Human-readable description that the analyst sees in the plugin UI.
+  Description: >
+    Read-only CrowdStrike Falcon enrichment for the Alfred - SOC agent.
+    Searches detections/alerts by user, device, IP, or file hash;
+    looks up CVEs and the assets they affect in Falcon Spotlight; and
+    runs CrowdStrike Query Language (CQL) searches against Next-Gen
+    SIEM (NGSIEM / LogScale) repositories.
+
+  # Plugin-level settings shown to the admin during installation.
+  # Templated as `{{SettingName}}` elsewhere in this manifest.
+  Settings:
+    - Name: FalconCloud
+      Label: Falcon API base URL (cloud)
+      Description: >
+        Base URL for your Falcon API. Pick the one matching the cloud
+        your CID is hosted in:
+          US-1      → https://api.crowdstrike.com
+          US-2      → https://api.us-2.crowdstrike.com
+          EU-1      → https://api.eu-1.crowdstrike.com
+          US-GOV-1  → https://api.laggar.gcw.crowdstrike.com
+          US-GOV-2  → https://api.us-gov-2.crowdstrike.mil
+        Enter the URL exactly as shown above, with no trailing slash.
+      HintText: https://api.crowdstrike.com
+      SettingType: String
+      Required: true
+
+    - Name: NGSIEMDefaultRepository
+      Label: Default NGSIEM repository
+      Description: >
+        Default LogScale/NGSIEM repository to query when the analyst
+        does not specify one. This tenant has, among others:
+        search-all, base_sensor, paloalto, microsoft_defender_xdr,
+        3pi_microsoft_entra_id, detections, risks. Recommended default
+        for Falcon-centric SOC work is `base_sensor`; use `search-all`
+        for broad cross-repo hunts.
+      HintText: base_sensor
+      SettingType: String
+      Required: false
+
+  # Which authentication schemes this plugin supports.
+  # Security Copilot will surface these as options at install time.
+  SupportedAuthTypes:
+    - OAuthClientCredentialsFlow
+
+  # OAuth 2.0 Client Credentials Flow.
+  # Security Copilot will exchange the admin-provided ClientId/ClientSecret
+  # for a bearer token at TokenEndpoint, then inject it as the
+  # `Authorization: Bearer <token>` header on every API call.
+  Authorization:
+    Type: OAuthClientCredentialsFlow
+    # Falcon token endpoint. NOTE: this MUST be edited to match the cloud
+    # selected in FalconCloud. Security Copilot does not perform setting
+    # substitution inside Authorization fields, so distribute one manifest
+    # per cloud — or have the admin edit this line before upload.
+    TokenEndpoint: https://api.crowdstrike.com/oauth2/token
+    AuthorizationContentType: application/x-www-form-urlencoded
+    # Falcon ignores `scope` on the token request — scopes are bound to
+    # the API client at creation time in the Falcon console. Leaving
+    # Scopes empty is intentional and correct.
+    Scopes: ""
+
+SkillGroups:
+  - Format: API
+    Settings:
+      # Public URL where Security Copilot fetches this plugin's
+      # OpenAPI 3.0.1 spec. Must be the *raw* file URL, not the
+      # GitHub UI URL — i.e. raw.githubusercontent.com/<owner>/<repo>/
+      # <branch>/<file>, not github.com/<owner>/<repo>/blob/<branch>/<file>.
+      OpenApiSpecUrl: https://raw.githubusercontent.com/m3hdx/MSSC-CRWD-Plugin/main/crowdstrike-alfred-openapi.yml
+
+      # Override the OpenAPI `servers[0].url` with the FalconCloud
+      # setting value, so the same OpenAPI spec works across all
+      # Falcon clouds.
+      EndpointUrlSettingName: FalconCloud
